@@ -657,6 +657,284 @@ where
     todo!()
 }
 
+/// Filter 1-dimensional data `x` along one-dimension with a FIR filter.
+///
+/// Filter a data sequence, `x`, using a digital filter.  This works for many
+/// fundamental data types (including Object type).  The filter is a direct
+/// form II transposed implementation of the standard difference equation
+/// (see Notes).
+///
+/// The function [super::sosfilt_dyn] (and filter design using ``output='sos'``) should be
+/// preferred over `lfilter` for most filtering tasks, as second-order sections
+/// have fewer numerical problems.
+///
+/// ## Parameters
+/// * `b` : array_like  
+///   The numerator coefficient vector in a 1-D sequence.
+/// * `a` : array_like  
+///   The denominator coefficient vector in a 1-D sequence.  If ``a[0]``
+///   is not 1, then both `a` and `b` are normalized by ``a[0]``.
+/// * `x` : array_like  
+///   An N-dimensional input array.
+/// * `axis`: `Option<isize>`
+///   Default to `-1` if `None`.  
+///   Panics in accordance with [ndarray::ArrayBase::axis_iter].
+/// * `zi`: array_like  
+///   Currently not implemented.  
+///   Initial conditions for filter delays. It is a vector
+///   (or array of vectors for an N-dimensional input) of length
+///   ``max(len(a), len(b)) - 1``.  If `zi` is None or is not given then
+///   initial rest is assumed.  See `lfiltic` and [super::lfilter_zi_dyn] for more information.
+///
+/// ## Returns
+/// * `y` : array  
+///   The output of the digital filter.
+/// * `zf` : array, optional  
+///   If `zi` is None, this is not returned, otherwise, `zf` holds the
+///   final filter delay values.
+///
+/// # See Also
+/// * [super::lfilter_zi_dyn]  
+///
+/// # Notes
+/// For compile time reasons, lfilter is implemented per ArrayN at the moment.
+///
+/// # Examples
+/// On a 1-dimensional signal:
+/// ```
+/// use ndarray::{array, ArrayBase, Array1, ArrayView1, Dim, Ix, OwnedRepr};
+/// use sci_rs::signal::filter::lfilter1_fft;
+///
+/// let b = array![5., 4., 1., 2.];
+/// let a = array![1.];
+/// let x = array![1., 2., 3., 4., 3., 5., 6.];
+/// let expected = array![5., 14., 24., 36., 38., 47., 61.];
+/// let (result, _) = lfilter1_fft((&b).into(), (&a).into(), x.view(), None, None).unwrap(); // By ref
+///
+/// assert_eq!(result.len(), expected.len());
+/// result.into_iter().zip(expected).for_each(|(r, e)| {
+///     assert_eq!(r, e);
+/// });
+///
+/// let (result, _) = lfilter1_fft((&b).into(), (&a).into(), x, None, None).unwrap(); // By value
+/// ```
+///
+/// # Panics
+/// Currently yet to implement for `a.len() > 1`.
+// NOTE: zi's TypeSig inherits from lfilter's output, in accordance with examples section of
+// documentation, both lfilter_zi and this should eventually support NDArray.
+pub fn lfilter1_fft<'a, T, S>(
+    b: ArrayView1<'a, T>,
+    a: ArrayView1<'a, T>,
+    x: ArrayBase<S, Dim<[Ix; 1]>>,
+    axis: Option<isize>,
+    zi: Option<ArrayView<T, Dim<[Ix; 1]>>>,
+) -> Result<LFilterResult<T, 1>>
+where
+    [Ix; 1]: IntoDimension<Dim = Dim<[Ix; 1]>>,
+    Dim<[Ix; 1]>: RemoveAxis,
+    T: NumAssign + FromPrimitive + Copy + 'a,
+    S: Data<Elem = T> + 'a,
+{
+    if a.len() > 1 {
+        return linear_filter(b, a, x, axis, zi);
+    };
+
+    let (axis, axis_inner) = check_and_get_axis_st(axis, &x)?;
+
+    if a.is_empty() {
+        return Err(Error::InvalidArg {
+            arg: "a".into(),
+            reason:
+                "Empty 1D array will result in inf/nan result. Consider setting to `array![1.]`."
+                    .into(),
+        });
+    } else if a.first().unwrap().is_zero() {
+        return Err(Error::InvalidArg {
+            arg: "a".into(),
+            reason: "First element of a found to be zero.".into(),
+        });
+    }
+    let b: Array1<T> = b.mapv(|bi| bi / a[0]); // b /= a[0]
+
+    if let Some(zii) = zi {
+        // Use a separate branch to avoid unnecessary heap allocation of `out_full` in `zi` = None
+        // case.
+        let mut zi = zii.reborrow();
+
+        // if zi.ndim != x.ndim { return Err(...) } is signature asserted.
+
+        let mut expected_shape: [usize; 1] = x.shape().try_into().unwrap();
+        *expected_shape // expected_shape[axis] = b.shape[0] - 1
+            .get_mut(axis_inner)
+            .expect("invalid axis_inner") = b
+            .shape()
+            .first()
+            .expect("Could not get 0th axis len of b")
+            .checked_sub(1)
+            .expect("underflowing subtract");
+
+        if *zi.shape() != expected_shape {
+            let strides: [Ix; 1] = {
+                let zi_shape = zi.shape();
+                let zi_strides = zi.strides();
+
+                // Waiting for try_collect() from nightly... we use this Vec<Result<>> -> Result<Vec<>> method..
+                let tmp_heap: Vec<Result<_>> = (0..1)
+                    .map(|k| {
+                        if zi_shape[k] == expected_shape[k] {
+                            zi_strides[k].try_into().map_err(|_| Error::InvalidArg {
+                                arg: "zi".into(),
+                                reason: "zi found with negative stride".into(),
+                            })
+                        } else if k != axis_inner && zi_shape[k] == 1 {
+                            Ok(0)
+                        } else {
+                            Err(Error::InvalidArg {
+                                arg: "zi".into(),
+                                reason: "Unexpected shape for parameter zi".into(),
+                            })
+                        }
+                    })
+                    .collect();
+                let tmp_heap: Result<Vec<Ix>> = tmp_heap.into_iter().collect();
+
+                tmp_heap?.try_into().unwrap()
+            };
+
+            zi = ArrayView::from_shape(expected_shape.strides(strides), zii.as_slice().unwrap())
+                .unwrap();
+        };
+
+        let (out_full_dim, out_full_dim_inner): (Dim<_>, [Ix; 1]) = {
+            let mut tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            tmp[axis_inner] += b.len_of(Axis(0)) - 1; // From np.convolve(..., 'full')
+            (IntoDimension::into_dimension(tmp), tmp)
+        };
+
+        let mut out_full: Array<T, Dim<[Ix; 1]>> = ArrayBase::zeros(out_full_dim);
+        out_full
+            .lanes_mut(axis)
+            .into_iter()
+            .zip(x.lanes(axis)) // Almost basically np.apply_along_axis
+            .try_for_each(|(mut out_full_slice, y)| {
+                // np.convolve uses full mode by default
+                // ```py
+                // out_full = np.apply_along_axis(lambda y: np.convolve(b, y), axis, x)
+                // ```
+                use sci_rs_core::num_rs::{convolve, ConvolveMode};
+                convolve(y, (&b).into(), ConvolveMode::Full)?.assign_to(&mut out_full_slice);
+                Ok(())
+            })?;
+
+        // ```py
+        // ind[axis] = slice(zi.shape[axis])
+        // out_full[tuple(ind)] += zi
+        // ```
+        {
+            let slice_info: SliceInfo<_, Dim<[Ix; 1]>, Dim<[Ix; 1]>> = {
+                let t = zi.shape()[axis_inner];
+                let mut tmp = [SliceInfoElem::from(..); 1];
+                tmp[axis_inner] = SliceInfoElem::Slice {
+                    start: 0,
+                    end: Some(t as isize),
+                    step: 1,
+                };
+
+                SliceInfo::try_from(tmp).unwrap()
+            }; // Does not work because unless N: N<=6 cannot be bounded on type_sig
+            let mut s = out_full.slice_mut(&slice_info);
+            s += &zi;
+        }
+
+        let (out_dim, out_dim_inner) = {
+            let tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            (IntoDimension::into_dimension(tmp), tmp)
+        };
+        let mut out = ArrayBase::zeros(out_dim);
+        out.lanes_mut(axis)
+            .into_iter()
+            .zip(out_full.lanes(axis))
+            .for_each(|(mut out_slice, out_full_slice)| {
+                // ```py
+                // # Create the [...; :out_full.shape[axis] - len(b) + 1; ...] at index=axis
+                // ind[axis] = slice(out_full.shape[axis] - len(b) + 1)
+                // out = out_full[tuple(ind)]
+                // ```
+                out_full_slice
+                    .slice(
+                        SliceInfo::try_from([SliceInfoElem::Slice {
+                            start: 0,
+                            end: Some(out_dim_inner[axis_inner] as isize),
+                            step: 1,
+                        }])
+                        .unwrap(),
+                    )
+                    .assign_to(&mut out_slice);
+            });
+
+        // ```py
+        // ind[axis] = slice(out_full.shape[axis] - len(b) + 1, None)
+        // zf = out_full[tuple(ind)]
+        // ```
+        let zf = {
+            let slice_info: SliceInfo<_, Dim<[Ix; 1]>, Dim<[Ix; 1]>> = {
+                let t = out_full.shape()[axis_inner]
+                    .checked_add(1)
+                    .unwrap()
+                    .checked_sub(b.len())
+                    .unwrap();
+                let mut tmp = [SliceInfoElem::from(..); 1];
+                tmp[axis_inner] = SliceInfoElem::Slice {
+                    start: t as isize,
+                    end: None,
+                    step: 1,
+                };
+
+                SliceInfo::try_from(tmp).unwrap()
+            };
+            out_full.slice(slice_info).to_owned()
+        };
+
+        Ok((out, Some(zf)))
+    } else {
+        // In contrast to the case where zi.is_some(), we can inline a slicing operation to reduce
+        // one extra heap allocation.
+
+        let (out_dim, out_dim_inner): (Dim<_>, [Ix; 1]) = {
+            let mut tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            (IntoDimension::into_dimension(tmp), tmp)
+        };
+        let mut out = ArrayBase::zeros(out_dim);
+
+        out.lanes_mut(axis)
+            .into_iter()
+            .zip(x.lanes(axis)) // Almost basically np.apply_along_axis
+            .try_for_each(|(mut out_slice, y)| {
+                // np.convolve uses full mode, but is eventually slices out with
+                // ```py
+                // ind = out_full.ndim * [slice(None)] # creates the "[:, :, ..., :]" slice r
+                // ind[axis] = slice(out_full.shape[axis] - len(b) + 1) # [:out_full.shape[ ..] - len(b) + 1]
+                // ```
+                use sci_rs_core::num_rs::{convolve, ConvolveMode};
+                let out_full = convolve(y, (&b).into(), ConvolveMode::Full)?;
+                out_full
+                    .slice(
+                        SliceInfo::try_from([SliceInfoElem::Slice {
+                            start: 0,
+                            end: Some(out_dim_inner[axis_inner] as isize),
+                            step: 1,
+                        }])
+                        .unwrap(),
+                    )
+                    .assign_to(&mut out_slice);
+                Ok(())
+            })?;
+
+        Ok((out, None))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
