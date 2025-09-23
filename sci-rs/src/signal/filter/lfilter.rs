@@ -670,10 +670,9 @@ where
 ///
 /// ## Parameters
 /// * `b` : array_like  
-///   The numerator coefficient vector in a 1-D sequence.
-/// * `a` : array_like  
-///   The denominator coefficient vector in a 1-D sequence.  If ``a[0]``
-///   is not 1, then both `a` and `b` are normalized by ``a[0]``.
+///   The numerator coefficient vector in a 1-D sequence.  
+///   The denominator coefficient vector `a` in assumed to be a 1-D sequence of just 1-element
+///   being unity.
 /// * `x` : array_like  
 ///   An N-dimensional input array.
 /// * `axis`: `Option<isize>`
@@ -703,29 +702,27 @@ where
 /// On a 1-dimensional signal:
 /// ```
 /// use ndarray::{array, ArrayBase, Array1, ArrayView1, Dim, Ix, OwnedRepr};
-/// use sci_rs::signal::filter::lfilter1_fft;
+/// use sci_rs::signal::filter::lfilter1_fir_fft;
 ///
 /// let b = array![5., 4., 1., 2.];
-/// let a = array![1.];
 /// let x = array![1., 2., 3., 4., 3., 5., 6.];
 /// let expected = array![5., 14., 24., 36., 38., 47., 61.];
-/// let (result, _) = lfilter1_fft((&b).into(), (&a).into(), x.view(), None, None).unwrap(); // By ref
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x.view(), None, None).unwrap(); // By ref
 ///
 /// assert_eq!(result.len(), expected.len());
 /// result.into_iter().zip(expected).for_each(|(r, e)| {
 ///     assert_eq!(r, e);
 /// });
 ///
-/// let (result, _) = lfilter1_fft((&b).into(), (&a).into(), x, None, None).unwrap(); // By value
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x, None, None).unwrap(); // By value
 /// ```
 ///
 /// # Panics
 /// Currently yet to implement for `a.len() > 1`.
 // NOTE: zi's TypeSig inherits from lfilter's output, in accordance with examples section of
 // documentation, both lfilter_zi and this should eventually support NDArray.
-pub fn lfilter1_fft<'a, T, S>(
+pub fn lfilter1_fir_fft<'a, T, S>(
     b: ArrayView1<'a, T>,
-    a: ArrayView1<'a, T>,
     x: ArrayBase<S, Dim<[Ix; 1]>>,
     axis: Option<isize>,
     zi: Option<ArrayView<T, Dim<[Ix; 1]>>>,
@@ -736,26 +733,7 @@ where
     T: NumAssign + FromPrimitive + Copy + 'a,
     S: Data<Elem = T> + 'a,
 {
-    if a.len() > 1 {
-        return linear_filter(b, a, x, axis, zi);
-    };
-
     let (axis, axis_inner) = check_and_get_axis_st(axis, &x)?;
-
-    if a.is_empty() {
-        return Err(Error::InvalidArg {
-            arg: "a".into(),
-            reason:
-                "Empty 1D array will result in inf/nan result. Consider setting to `array![1.]`."
-                    .into(),
-        });
-    } else if a.first().unwrap().is_zero() {
-        return Err(Error::InvalidArg {
-            arg: "a".into(),
-            reason: "First element of a found to be zero.".into(),
-        });
-    }
-    let b: Array1<T> = b.mapv(|bi| bi / a[0]); // b /= a[0]
 
     if let Some(zii) = zi {
         // Use a separate branch to avoid unnecessary heap allocation of `out_full` in `zi` = None
