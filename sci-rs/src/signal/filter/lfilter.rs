@@ -707,14 +707,14 @@ where
 /// let b = array![5., 4., 1., 2.];
 /// let x = array![1., 2., 3., 4., 3., 5., 6.];
 /// let expected = array![5., 14., 24., 36., 38., 47., 61.];
-/// let (result, _) = lfilter1_fir_fft((&b).into(), x.view(), None, None).unwrap(); // By ref
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x.view(), None).unwrap(); // By ref
 ///
 /// assert_eq!(result.len(), expected.len());
 /// result.into_iter().zip(expected).for_each(|(r, e)| {
 ///     assert_eq!(r, e);
 /// });
 ///
-/// let (result, _) = lfilter1_fir_fft((&b).into(), x, None, None).unwrap(); // By value
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x, None).unwrap(); // By value
 /// ```
 ///
 /// # Panics
@@ -724,16 +724,13 @@ where
 pub fn lfilter1_fir_fft<'a, T, S>(
     b: ArrayView1<'a, T>,
     x: ArrayBase<S, Dim<[Ix; 1]>>,
-    axis: Option<isize>,
-    zi: Option<ArrayView<T, Dim<[Ix; 1]>>>,
+    zi: Option<ArrayView1<T>>,
 ) -> Result<LFilterResult<T, 1>>
 where
-    [Ix; 1]: IntoDimension<Dim = Dim<[Ix; 1]>>,
-    Dim<[Ix; 1]>: RemoveAxis,
     T: NumAssign + FromPrimitive + Copy + 'a,
     S: Data<Elem = T> + 'a,
 {
-    let (axis, axis_inner) = check_and_get_axis_st(axis, &x)?;
+    let (axis, axis_inner) = (Axis(0), 0);
 
     if let Some(zii) = zi {
         // Use a separate branch to avoid unnecessary heap allocation of `out_full` in `zi` = None
@@ -744,8 +741,8 @@ where
 
         let mut expected_shape: [usize; 1] = x.shape().try_into().unwrap();
         *expected_shape // expected_shape[axis] = b.shape[0] - 1
-            .get_mut(axis_inner)
-            .expect("invalid axis_inner") = b
+            .get_mut(0)
+            .unwrap() = b
             .shape()
             .first()
             .expect("Could not get 0th axis len of b")
@@ -757,27 +754,23 @@ where
                 let zi_shape = zi.shape();
                 let zi_strides = zi.strides();
 
-                // Waiting for try_collect() from nightly... we use this Vec<Result<>> -> Result<Vec<>> method..
-                let tmp_heap: Vec<Result<_>> = (0..1)
-                    .map(|k| {
-                        if zi_shape[k] == expected_shape[k] {
-                            zi_strides[k].try_into().map_err(|_| Error::InvalidArg {
-                                arg: "zi".into(),
-                                reason: "zi found with negative stride".into(),
-                            })
-                        } else if k != axis_inner && zi_shape[k] == 1 {
-                            Ok(0)
-                        } else {
-                            Err(Error::InvalidArg {
-                                arg: "zi".into(),
-                                reason: "Unexpected shape for parameter zi".into(),
-                            })
-                        }
-                    })
-                    .collect();
-                let tmp_heap: Result<Vec<Ix>> = tmp_heap.into_iter().collect();
+                let tmp = {
+                    if zi_shape[0] == expected_shape[0] {
+                        zi_strides[0].try_into().map_err(|_| Error::InvalidArg {
+                            arg: "zi".into(),
+                            reason: "zi found with negative stride".into(),
+                        })
+                    } else if 0 != axis_inner && zi_shape[0] == 1 {
+                        Ok(0)
+                    } else {
+                        Err(Error::InvalidArg {
+                            arg: "zi".into(),
+                            reason: "Unexpected shape for parameter zi".into(),
+                        })
+                    }
+                }?;
 
-                tmp_heap?.try_into().unwrap()
+                [tmp]
             };
 
             zi = ArrayView::from_shape(expected_shape.strides(strides), zii.as_slice().unwrap())
@@ -785,12 +778,12 @@ where
         };
 
         let (out_full_dim, out_full_dim_inner): (Dim<_>, [Ix; 1]) = {
-            let mut tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            let mut tmp: [Ix; 1] = [x.len_of(Axis(0))];
             tmp[axis_inner] += b.len_of(Axis(0)) - 1; // From np.convolve(..., 'full')
             (IntoDimension::into_dimension(tmp), tmp)
         };
 
-        let mut out_full: Array<T, Dim<[Ix; 1]>> = ArrayBase::zeros(out_full_dim);
+        let mut out_full: Array1<T> = ArrayBase::zeros(out_full_dim);
         out_full
             .lanes_mut(axis)
             .into_iter()
@@ -826,7 +819,7 @@ where
         }
 
         let (out_dim, out_dim_inner) = {
-            let tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            let tmp: [Ix; 1] = [x.len_of(Axis(0))];
             (IntoDimension::into_dimension(tmp), tmp)
         };
         let mut out = ArrayBase::zeros(out_dim);
@@ -880,7 +873,7 @@ where
         // one extra heap allocation.
 
         let (out_dim, out_dim_inner): (Dim<_>, [Ix; 1]) = {
-            let mut tmp: [Ix; 1] = ndarray_shape_as_array(&x);
+            let tmp: [Ix; 1] = [x.len_of(Axis(0))];
             (IntoDimension::into_dimension(tmp), tmp)
         };
         let mut out = ArrayBase::zeros(out_dim);
