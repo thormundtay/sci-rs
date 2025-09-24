@@ -1238,4 +1238,73 @@ mod test {
             })
         }
     }
+
+    #[test]
+    fn one_dim_fir_no_zi_fft() {
+        {
+            // Tests for b.sum() > 1.
+            let b = array![5., 4., 1., 2.];
+            let x = array![1., 2., 3., 4., 3., 5., 6.];
+            let expected = array![5., 14., 24., 36., 38., 47., 61.];
+
+            let Ok((result, None)) = lfilter1_fir_fft((&b).into(), x, None) else {
+                panic!("Should not have errored")
+            };
+
+            assert_eq!(result.len(), expected.len());
+            result.into_iter().zip(expected).for_each(|(r, e)| {
+                assert_eq!(r, e);
+            })
+        }
+        {
+            // Tests for b[i] < 0 for some i, such that b.sum() = 1.
+            let b = array![0.7, -0.3, 0.6];
+            let x = array![1., 2., 3., 4., 3., 5., 6.];
+            let expected = array![0.7, 1.1, 2.1, 3.1, 2.7, 5., 4.5];
+
+            let Ok((result, None)) = lfilter1_fir_fft((&b).into(), x, None) else {
+                panic!("Should not have errored")
+            };
+
+            assert_eq!(result.len(), expected.len());
+            result.into_iter().zip(expected).for_each(|(r, e)| {
+                assert_relative_eq!(r, e, max_relative = 1e-6);
+            })
+        }
+    }
+
+    #[test]
+    fn one_dim_fir_with_zi_fft() {
+        {
+            // Case which does not falls into zi.shape() != expected_shape branch
+            let b = array![0.5, 0.4];
+            let x = array![-4., -3., -1., -2., 1., 2., -3., 4., 3., 5., 6., 7., -8., 1.];
+            let zi = array![-1.6];
+            let expected =
+                array![-3.6, -3.1, -1.7, -1.4, -0.3, 1.4, -0.7, 0.8, 3.1, 3.7, 5., 5.9, -1.2, -2.7];
+            let expected_zi = array![0.4];
+
+            let Ok((result, Some(r_zi))) = lfilter1_fir_fft((&b).into(), x, Some((&zi).into()))
+            else {
+                panic!("Should not have errored")
+            };
+
+            assert_eq!(result.len(), expected.len());
+            result.into_iter().zip(expected).for_each(|(r, e)| {
+                assert_relative_eq!(r, e, max_relative = 1e-6);
+            });
+            assert_eq!(r_zi.len(), expected_zi.len());
+            r_zi.into_iter().zip(expected_zi).for_each(|(r, e)| {
+                assert_relative_eq!(r, e, max_relative = 1e-6);
+            })
+        }
+        {
+            // Case which does falls into zi.shape() != expected_shape branch
+            let b = array![5., 0.4, 1., -2.];
+            let x = array![1., 2., 3., 4., 3., 5., 6.];
+            let zi = array![0.4];
+
+            assert!(lfilter1_fir_fft((&b).into(), x, Some((&zi).into())).is_err());
+        }
+    }
 }
