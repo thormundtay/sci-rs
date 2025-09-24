@@ -794,7 +794,7 @@ where
                 // out_full = np.apply_along_axis(lambda y: np.convolve(b, y), axis, x)
                 // ```
                 use sci_rs_core::num_rs::{convolve, ConvolveMode};
-                convolve(y, (&b).into(), ConvolveMode::Full)?.assign_to(&mut out_full_slice);
+                convolve(y, b, ConvolveMode::Full)?.assign_to(&mut out_full_slice);
                 Ok(())
             })?;
 
@@ -888,7 +888,7 @@ where
                 // ind[axis] = slice(out_full.shape[axis] - len(b) + 1) # [:out_full.shape[ ..] - len(b) + 1]
                 // ```
                 use sci_rs_core::num_rs::{convolve, ConvolveMode};
-                let out_full = convolve(y, (&b).into(), ConvolveMode::Full)?;
+                let out_full = convolve(y, b, ConvolveMode::Full)?;
                 out_full
                     .slice(
                         SliceInfo::try_from([SliceInfoElem::Slice {
