@@ -128,38 +128,56 @@ where
 /// With [ConvolveMode::Full]:
 /// ```
 /// use ndarray::array;
-/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratch};
+/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratchf64, prelude::get_fft_processor};
 ///
 /// let a = array![1., 2., 3.];
 /// let v = array![0., 1., 0.5];
+/// let mut proc = get_fft_processor();
 ///
 /// let expected = array![0., 1., 2.5, 4., 1.5];
-/// let result = convolve_scratch((&a).into(), (&v).into(), ConvolveMode::Full).unwrap();
-/// assert_eq!(result, expected);
+/// let result = convolve_scratchf64(a.view(), v.view(), ConvolveMode::Full, &mut proc).unwrap();
+///
+/// use approx::assert_relative_eq;
+/// use ndarray::Zip;
+/// Zip::from(&result)
+///     .and(&expected)
+///     .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12));
 /// ```
 /// With [ConvolveMode::Same]:
 /// ```
 /// use ndarray::array;
-/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratch};
+/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratchf64, prelude::get_fft_processor};
 ///
 /// let a = array![1., 2., 3.];
 /// let v = array![0., 1., 0.5];
+/// let mut proc = get_fft_processor();
 ///
 /// let expected = array![1., 2.5, 4.];
-/// let result = convolve_scratch((&a).into(), (&v).into(), ConvolveMode::Same).unwrap();
-/// assert_eq!(result, expected);
+/// let result = convolve_scratchf64(a.view(), v.view(), ConvolveMode::Same, &mut proc).unwrap();
+///
+/// use approx::assert_relative_eq;
+/// use ndarray::Zip;
+/// Zip::from(&result)
+///     .and(&expected)
+///     .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12));
 /// ```
 /// With [ConvolveMode::Same]:
 /// ```
 /// use ndarray::array;
-/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratch};
+/// use sci_rs_core::num_rs::{ConvolveMode, convolve_scratchf64, prelude::get_fft_processor};
 ///
 /// let a = array![1., 2., 3.];
 /// let v = array![0., 1., 0.5];
+/// let mut proc = get_fft_processor();
 ///
 /// let expected = array![2.5];
-/// let result = convolve_scratch((&a).into(), (&v).into(), ConvolveMode::Valid).unwrap();
-/// assert_eq!(result, expected);
+/// let result = convolve_scratchf64(a.view(), v.view(), ConvolveMode::Valid, &mut proc).unwrap();
+///
+/// use approx::assert_relative_eq;
+/// use ndarray::Zip;
+/// Zip::from(&result)
+///     .and(&expected)
+///     .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12));
 /// ```
 pub fn convolve_scratchf64(
     a: ArrayView1<f64>,
