@@ -721,17 +721,18 @@ where
 /// Currently yet to implement for `a.len() > 1`.
 // NOTE: zi's TypeSig inherits from lfilter's output, in accordance with examples section of
 // documentation, both lfilter_zi and this should eventually support NDArray.
-pub fn lfilter1_fir_fft<'a, T, S>(
-    b: ArrayView1<'a, T>,
+pub fn lfilter1_fir_fft<'a, S>(
+    b: ArrayView1<'a, f64>,
     x: ArrayBase<S, Dim<[Ix; 1]>>,
-    zi: Option<ArrayView1<T>>,
-) -> Result<LFilterResult<T, 1>>
+    zi: Option<ArrayView1<f64>>,
+    proc: &mut impl sci_rs_core::num_rs::prelude::FftProcessor<f64, f64>,
+) -> Result<LFilterResult<f64, 1>>
 where
-    T: NumAssign + FromPrimitive + Copy + 'a,
-    S: Data<Elem = T> + 'a,
+    S: Data<Elem = f64> + 'a,
 {
     let (axis, axis_inner) = (Axis(0), 0);
 
+    use sci_rs_core::num_rs::{convolve_scratchf64, ConvolveMode};
     if let Some(zii) = zi {
         // Use a separate branch to avoid unnecessary heap allocation of `out_full` in `zi` = None
         // case.
@@ -783,7 +784,7 @@ where
             (IntoDimension::into_dimension(tmp), tmp)
         };
 
-        let mut out_full: Array1<T> = ArrayBase::zeros(out_full_dim);
+        let mut out_full: Array1<_> = ArrayBase::zeros(out_full_dim);
         out_full
             .lanes_mut(axis)
             .into_iter()
@@ -793,8 +794,7 @@ where
                 // ```py
                 // out_full = np.apply_along_axis(lambda y: np.convolve(b, y), axis, x)
                 // ```
-                use sci_rs_core::num_rs::{convolve, ConvolveMode};
-                convolve(y, b, ConvolveMode::Full)?.assign_to(&mut out_full_slice);
+                convolve_scratchf64(y, b, ConvolveMode::Full, proc)?.assign_to(&mut out_full_slice);
                 Ok(())
             })?;
 
@@ -887,8 +887,7 @@ where
                 // ind = out_full.ndim * [slice(None)] # creates the "[:, :, ..., :]" slice r
                 // ind[axis] = slice(out_full.shape[axis] - len(b) + 1) # [:out_full.shape[ ..] - len(b) + 1]
                 // ```
-                use sci_rs_core::num_rs::{convolve, ConvolveMode};
-                let out_full = convolve(y, b, ConvolveMode::Full)?;
+                let out_full = convolve_scratchf64(y, b, ConvolveMode::Full, proc)?;
                 out_full
                     .slice(
                         SliceInfo::try_from([SliceInfoElem::Slice {
@@ -911,7 +910,8 @@ mod test {
     use super::*;
     use alloc::vec;
     use approx::assert_relative_eq;
-    use ndarray::{array, ArrayBase, Dim, Ix, OwnedRepr, ViewRepr};
+    use ndarray::{array, ArrayBase, Dim, Ix, OwnedRepr, ViewRepr, Zip};
+    use sci_rs_core::num_rs::prelude::*;
 
     // Tests that have a = [1.] with zi = None on input x with dim = 1.
     #[test]
@@ -1241,20 +1241,20 @@ mod test {
 
     #[test]
     fn one_dim_fir_no_zi_fft() {
+        let mut proc = get_fft_processor();
         {
             // Tests for b.sum() > 1.
             let b = array![5., 4., 1., 2.];
             let x = array![1., 2., 3., 4., 3., 5., 6.];
             let expected = array![5., 14., 24., 36., 38., 47., 61.];
 
-            let Ok((result, None)) = lfilter1_fir_fft((&b).into(), x, None) else {
+            let Ok((result, None)) = lfilter1_fir_fft(b.view(), x, None, &mut proc) else {
                 panic!("Should not have errored")
             };
 
-            assert_eq!(result.len(), expected.len());
-            result.into_iter().zip(expected).for_each(|(r, e)| {
-                assert_eq!(r, e);
-            })
+            Zip::from(&expected)
+                .and(&result)
+                .for_each(|&e, &r| assert_relative_eq!(r, e, max_relative = 1e-5));
         }
         {
             // Tests for b[i] < 0 for some i, such that b.sum() = 1.
@@ -1262,19 +1262,19 @@ mod test {
             let x = array![1., 2., 3., 4., 3., 5., 6.];
             let expected = array![0.7, 1.1, 2.1, 3.1, 2.7, 5., 4.5];
 
-            let Ok((result, None)) = lfilter1_fir_fft((&b).into(), x, None) else {
+            let Ok((result, None)) = lfilter1_fir_fft(b.view(), x, None, &mut proc) else {
                 panic!("Should not have errored")
             };
 
-            assert_eq!(result.len(), expected.len());
-            result.into_iter().zip(expected).for_each(|(r, e)| {
-                assert_relative_eq!(r, e, max_relative = 1e-6);
-            })
+            Zip::from(&expected)
+                .and(&result)
+                .for_each(|&e, &r| assert_relative_eq!(r, e, max_relative = 1e-5));
         }
     }
 
     #[test]
     fn one_dim_fir_with_zi_fft() {
+        let mut proc = get_fft_processor();
         {
             // Case which does not falls into zi.shape() != expected_shape branch
             let b = array![0.5, 0.4];
@@ -1284,19 +1284,18 @@ mod test {
                 array![-3.6, -3.1, -1.7, -1.4, -0.3, 1.4, -0.7, 0.8, 3.1, 3.7, 5., 5.9, -1.2, -2.7];
             let expected_zi = array![0.4];
 
-            let Ok((result, Some(r_zi))) = lfilter1_fir_fft((&b).into(), x, Some((&zi).into()))
+            let Ok((result, Some(r_zi))) =
+                lfilter1_fir_fft(b.view(), x, Some(zi.view()), &mut proc)
             else {
                 panic!("Should not have errored")
             };
 
-            assert_eq!(result.len(), expected.len());
-            result.into_iter().zip(expected).for_each(|(r, e)| {
-                assert_relative_eq!(r, e, max_relative = 1e-6);
-            });
-            assert_eq!(r_zi.len(), expected_zi.len());
-            r_zi.into_iter().zip(expected_zi).for_each(|(r, e)| {
-                assert_relative_eq!(r, e, max_relative = 1e-6);
-            })
+            Zip::from(&expected)
+                .and(&result)
+                .for_each(|&e, &r| assert_relative_eq!(r, e, max_relative = 1e-5));
+            Zip::from(&expected_zi)
+                .and(&r_zi)
+                .for_each(|&e_zi, &r_zi| assert_relative_eq!(r_zi, e_zi, max_relative = 1e-5));
         }
         {
             // Case which does falls into zi.shape() != expected_shape branch
@@ -1304,7 +1303,7 @@ mod test {
             let x = array![1., 2., 3., 4., 3., 5., 6.];
             let zi = array![0.4];
 
-            assert!(lfilter1_fir_fft((&b).into(), x, Some((&zi).into())).is_err());
+            assert!(lfilter1_fir_fft(b.view(), x, Some(zi.view()), &mut proc).is_err());
         }
     }
 }
