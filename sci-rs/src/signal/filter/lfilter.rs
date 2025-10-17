@@ -779,8 +779,7 @@ where
         };
 
         let (out_full_dim, out_full_dim_inner): (Dim<_>, [Ix; 1]) = {
-            let mut tmp: [Ix; 1] = [x.len_of(Axis(0))];
-            tmp[axis_inner] += b.len_of(Axis(0)) - 1; // From np.convolve(..., 'full')
+            let tmp = [x.len_of(Axis(0)) + b.len_of(Axis(0)) - 1];
             (IntoDimension::into_dimension(tmp), tmp)
         };
 
@@ -805,12 +804,11 @@ where
         {
             let slice_info: SliceInfo<_, Dim<[Ix; 1]>, Dim<[Ix; 1]>> = {
                 let t = zi.shape()[axis_inner];
-                let mut tmp = [SliceInfoElem::from(..); 1];
-                tmp[axis_inner] = SliceInfoElem::Slice {
+                let tmp = [SliceInfoElem::Slice {
                     start: 0,
                     end: Some(t as isize),
                     step: 1,
-                };
+                }; 1];
 
                 SliceInfo::try_from(tmp).unwrap()
             }; // Does not work because unless N: N<=6 cannot be bounded on type_sig
@@ -855,12 +853,11 @@ where
                     .unwrap()
                     .checked_sub(b.len())
                     .unwrap();
-                let mut tmp = [SliceInfoElem::from(..); 1];
-                tmp[axis_inner] = SliceInfoElem::Slice {
+                let tmp = [SliceInfoElem::Slice {
                     start: t as isize,
                     end: None,
                     step: 1,
-                };
+                }; 1];
 
                 SliceInfo::try_from(tmp).unwrap()
             };
