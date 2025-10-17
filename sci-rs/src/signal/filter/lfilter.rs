@@ -703,18 +703,21 @@ where
 /// ```
 /// use ndarray::{array, ArrayBase, Array1, ArrayView1, Dim, Ix, OwnedRepr};
 /// use sci_rs::signal::filter::lfilter1_fir_fft;
+/// use sci_rs_core::num_rs::prelude::*;
+/// let mut proc = get_fft_processor();
 ///
 /// let b = array![5., 4., 1., 2.];
 /// let x = array![1., 2., 3., 4., 3., 5., 6.];
-/// let expected = array![5., 14., 24., 36., 38., 47., 61.];
-/// let (result, _) = lfilter1_fir_fft((&b).into(), x.view(), None).unwrap(); // By ref
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x.view(), None, &mut proc).unwrap(); // By ref
 ///
-/// assert_eq!(result.len(), expected.len());
-/// result.into_iter().zip(expected).for_each(|(r, e)| {
-///     assert_eq!(r, e);
+/// use approx::assert_relative_eq;
+/// use ndarray::Zip;
+/// let expected = array![5., 14., 24., 36., 38., 47., 61.];
+/// Zip::from(&result).and(&expected).for_each(|r, e| {
+///     assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12)
 /// });
 ///
-/// let (result, _) = lfilter1_fir_fft((&b).into(), x, None).unwrap(); // By value
+/// let (result, _) = lfilter1_fir_fft((&b).into(), x, None, &mut proc).unwrap(); // By value
 /// ```
 ///
 /// # Panics
