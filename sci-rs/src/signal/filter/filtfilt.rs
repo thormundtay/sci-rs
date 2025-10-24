@@ -1,6 +1,7 @@
 use super::arraytools::{
     axis_reverse_unsafe, axis_slice_unsafe, check_and_get_axis_dyn, ndarray_shape_as_array_st,
 };
+use super::lfilter::lfilter1_fir_fft;
 use super::lfilter::LFilter;
 use super::lfilter_zi::lfilter_zi_dyn;
 use alloc::{vec, vec::Vec};
@@ -423,14 +424,8 @@ filtfilt_for_dim!(6);
 /// # Parameters
 /// * `b`: (N,) array_like  
 ///   The numerator coefficient vector of the filter.
-/// * `a`: (N,) array_like  
-///   The denominator coefficient vector of the filter.  If ``a[0]``
-///   is not 1, then both `a` and `b` are normalized b:y ``a[0]``.
 /// * `x`: array_like  
 ///   The array of data to be filtered.
-/// * `axis`: int, optional  
-///   The axis of `x` to which the filter is applied.  
-///   Default is -1.
 /// * `pad`
 ///   [Option::None] here denotes a deliberate absence of padding.
 ///   * `padtype` [FiltFiltPadType]
@@ -491,26 +486,28 @@ filtfilt_for_dim!(6);
 /// about the end point of the data.  The constant extension extends the data with the values
 /// at the end points. On both the forward and backward passes, the initial condition of the
 /// filter is found by using `lfilter_zi` and scaling it by the end point of the extended data.
-fn filtfilt1_fir_fft<'a, S>(
+pub fn filtfilt1_fir_fft<'a, S>(
     b: ArrayView1<'a, f64>,
-    a: ArrayView1<'a, f64>,
     x: ArrayBase<S, Dim<[Ix; 1]>>,
-    axis: Option<isize>,
     padding: Option<FiltFiltPad>,
+    proc: &mut impl sci_rs_core::num_rs::prelude::FftProcessor<f64, f64>,
 ) -> Result<Array1<f64>>
 where
-    S: Data<Elem = f64>, // T: nalgebra::RealField + Copy + core::iter::Sum, // From lfilter_zi_dyn
+    S: Data<Elem = f64> + 'a,
 {
-    let axis = check_and_get_axis_dyn(axis, &x).map_err(|_| Error::InvalidArg {
-        arg: "axis".into(),
-        reason: "index out of range.".into(),
-    })?;
-    let (edge, ext) = validate_pad(padding, x.view(), axis, a.len().max(b.len()))?;
+    if b.is_empty() {
+        return Err(Error::InvalidArg {
+            arg: "b".into(),
+            reason: "numerator for filter must be non-zero in length!".into(),
+        });
+    }
+    let axis = 0;
+    let (edge, ext) = validate_pad(padding, x.view(), axis, b.len())?;
 
     let zi: Array<_, Dim<[Ix; 1]>> = {
-        let mut zi = lfilter_zi_dyn(b.as_slice().unwrap(), a.as_slice().unwrap());
-        let mut sh = [1; 1];
-        sh[axis] = zi.len(); // .size()?
+        // There is no Array<S, Dim<[Ix; 1]>>::lfilter_zi_st yet
+        let mut zi = lfilter_zi_dyn(b.as_slice().unwrap(), &[1.]);
+        let sh = [zi.len(); 1]; // .size()?
 
         zi.into_shape_with_order(sh)
             .map_err(|_| Error::InvalidArg {
@@ -521,24 +518,17 @@ where
     let (y, _) = {
         let x0 = axis_slice_unsafe(&ext, None, Some(1), None, axis, ext.ndim())?;
         let zi_arg = zi.clone() * x0; // Is it possible to not need to clone?
-        ArrayBase::<_, Dim<[Ix; 1]>>::lfilter(
-            b.view(),
-            a.view(),
-            ext,
-            Some(axis as _),
-            Some(zi_arg.view()),
-        )?
+        lfilter1_fir_fft(b.view(), ext, Some(zi_arg.view()), proc)?
     };
 
     let (y, _) = {
         let y0 = axis_slice_unsafe(&y, Some(-1), None, None, axis, y.ndim())?;
         let zi_arg = zi * y0; // originally zi * y0
-        ArrayView1::lfilter(
+        lfilter1_fir_fft(
             b.view(),
-            a.view(),
             unsafe { axis_reverse_unsafe(&y, axis, 1) },
-            Some(axis as _),
             Some(zi_arg.view()),
+            proc,
         )?
     };
 
