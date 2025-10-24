@@ -724,14 +724,14 @@ where
 /// Currently yet to implement for `a.len() > 1`.
 // NOTE: zi's TypeSig inherits from lfilter's output, in accordance with examples section of
 // documentation, both lfilter_zi and this should eventually support NDArray.
-pub fn lfilter1_fir_fft<'a, S>(
-    b: ArrayView1<'a, f64>,
+pub fn lfilter1_fir_fft<S>(
+    b: ArrayView1<f64>,
     x: ArrayBase<S, Dim<[Ix; 1]>>,
     zi: Option<ArrayView1<f64>>,
     proc: &mut impl sci_rs_core::num_rs::prelude::FftProcessor<f64, f64>,
 ) -> Result<LFilterResult<f64, 1>>
 where
-    S: Data<Elem = f64> + 'a,
+    S: Data<Elem = f64>,
 {
     let (axis, axis_inner) = (Axis(0), 0);
 
