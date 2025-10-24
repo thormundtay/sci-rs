@@ -6,8 +6,8 @@ use super::lfilter_zi::lfilter_zi_dyn;
 use alloc::{vec, vec::Vec};
 use core::ops::{Add, Sub};
 use ndarray::{
-    Array, ArrayBase, ArrayView, ArrayView1, Axis, CowArray, Data, Dim, Dimension, Ix, RawData,
-    RemoveAxis, SliceArg, SliceInfo, SliceInfoElem,
+    Array, Array1, ArrayBase, ArrayView, ArrayView1, Axis, CowArray, Data, Dim, Dimension, Ix,
+    RawData, RemoveAxis, SliceArg, SliceInfo, SliceInfoElem,
 };
 use sci_rs_core::{Error, Result};
 
@@ -407,6 +407,152 @@ filtfilt_for_dim!(3);
 filtfilt_for_dim!(4);
 filtfilt_for_dim!(5);
 filtfilt_for_dim!(6);
+
+/// Apply a digital filter forward and backwared to a 1-dimensional signal `x` along one-dimension with a FIR filter.
+///
+/// This function applies a linear digital filter twice, once forward and
+/// once backwards.  The combined filter has zero phase and a filter order
+/// twice that of the original.
+///
+/// The function provides options for handling the edges of the signal.
+///
+/// The function `sosfiltfilt` (and filter design using ``output='sos'``)
+/// should be preferred over `filtfilt` for most filtering tasks, as
+/// second-order sections have fewer numerical problems.
+///
+/// # Parameters
+/// * `b`: (N,) array_like  
+///   The numerator coefficient vector of the filter.
+/// * `a`: (N,) array_like  
+///   The denominator coefficient vector of the filter.  If ``a[0]``
+///   is not 1, then both `a` and `b` are normalized b:y ``a[0]``.
+/// * `x`: array_like  
+///   The array of data to be filtered.
+/// * `axis`: int, optional  
+///   The axis of `x` to which the filter is applied.  
+///   Default is -1.
+/// * `pad`
+///   [Option::None] here denotes a deliberate absence of padding.
+///   * `padtype` [FiltFiltPadType]
+///     Must be 'odd', 'even', 'constant', or None.  
+///     This determines the type of extension to use for the padded signal to which the filter is applied.  
+///     The default is 'odd'.
+///   * `padlen` int or None, optional  
+///     The number of elements by which to extend `x` at both ends of `axis` before applying
+///     the filter.  
+///     This value must be less than ``x.shape[axis] - 1``.  ``padlen=0`` implies no padding. [Option::None] here denotes the default value.  
+///     The default value is ``3 * max(len(a), len(b))``.
+///
+/// # Returns
+/// * y : `Array`
+///   The filtered output with the same shape as `x`.
+///
+/// # Example
+/// The following examples shows how to use an arbitrary FIR filter on a 2-dimensional input
+/// `x`.
+/// ```
+/// use sci_rs::signal::filter::{FiltFilt, FiltFiltPad};
+/// use ndarray::{array, Array2, ArrayView2};
+///     let x = array![
+///         [1., 2., 3., 4., 5., 6., 7., 8., 9., 10.],
+///         [0., 1., 4., 9., 16., 25., 36., 49., 64., 81.]
+///     ];
+/// let b = array![0.5, 0.4, 0.1];
+/// let a = array![1.];
+/// let _ = ArrayView2::filtfilt(
+///     b.view(),
+///     a.view(),
+///     x.view(), // Pass x by reference
+///     Some(1),
+///     Some(FiltFiltPad::default())).unwrap();
+/// let result = Array2::filtfilt(
+///     b.view(),
+///     a.view(),
+///     x, // Pass x by value
+///     Some(1),
+///     Some(FiltFiltPad::default())).unwrap();
+///
+/// use approx::assert_relative_eq;
+/// use ndarray::Zip;
+/// let expected = array![
+///     [1., 2., 3., 4., 5., 6., 7., 8., 9., 10.],
+///     [0., 1.78, 4.88, 9.88, 16.88, 25.88, 36.88, 49.88, 64.78, 81.]
+/// ];
+/// Zip::from(&result).and(&expected)
+///     .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-6));
+/// ```
+///
+/// # See Also
+/// sosfiltfilt, lfilter_zi, lfilter, lfiltic, savgol_filter, sosfilt, filtfilt_gust
+///
+/// # Notes
+/// When `method` is "pad", the function pads the data along the given axis in one of three
+/// ways: odd, even or constant.  The odd and even extensions have the corresponding symmetry
+/// about the end point of the data.  The constant extension extends the data with the values
+/// at the end points. On both the forward and backward passes, the initial condition of the
+/// filter is found by using `lfilter_zi` and scaling it by the end point of the extended data.
+fn filtfilt1_fir_fft<'a, S>(
+    b: ArrayView1<'a, f64>,
+    a: ArrayView1<'a, f64>,
+    x: ArrayBase<S, Dim<[Ix; 1]>>,
+    axis: Option<isize>,
+    padding: Option<FiltFiltPad>,
+) -> Result<Array1<f64>>
+where
+    S: Data<Elem = f64>, // T: nalgebra::RealField + Copy + core::iter::Sum, // From lfilter_zi_dyn
+{
+    let axis = check_and_get_axis_dyn(axis, &x).map_err(|_| Error::InvalidArg {
+        arg: "axis".into(),
+        reason: "index out of range.".into(),
+    })?;
+    let (edge, ext) = validate_pad(padding, x.view(), axis, a.len().max(b.len()))?;
+
+    let zi: Array<_, Dim<[Ix; 1]>> = {
+        let mut zi = lfilter_zi_dyn(b.as_slice().unwrap(), a.as_slice().unwrap());
+        let mut sh = [1; 1];
+        sh[axis] = zi.len(); // .size()?
+
+        zi.into_shape_with_order(sh)
+            .map_err(|_| Error::InvalidArg {
+                arg: "b/a".into(),
+                reason: "Generated lfilter_zi from given b or a resulted in an error.".into(),
+            })?
+    };
+    let (y, _) = {
+        let x0 = axis_slice_unsafe(&ext, None, Some(1), None, axis, ext.ndim())?;
+        let zi_arg = zi.clone() * x0; // Is it possible to not need to clone?
+        ArrayBase::<_, Dim<[Ix; 1]>>::lfilter(
+            b.view(),
+            a.view(),
+            ext,
+            Some(axis as _),
+            Some(zi_arg.view()),
+        )?
+    };
+
+    let (y, _) = {
+        let y0 = axis_slice_unsafe(&y, Some(-1), None, None, axis, y.ndim())?;
+        let zi_arg = zi * y0; // originally zi * y0
+        ArrayView1::lfilter(
+            b.view(),
+            a.view(),
+            unsafe { axis_reverse_unsafe(&y, axis, 1) },
+            Some(axis as _),
+            Some(zi_arg.view()),
+        )?
+    };
+
+    let y = unsafe { axis_reverse_unsafe(&y, axis, 1) };
+
+    if edge > 0 {
+        let y = unsafe {
+            axis_slice_unsafe(&y, Some(edge as _), Some(-(edge as isize)), None, axis, 1)
+        }?;
+        Ok(y.to_owned())
+    } else {
+        Ok(y.to_owned())
+    }
+}
 
 #[cfg(test)]
 mod test {
