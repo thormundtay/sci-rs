@@ -446,35 +446,31 @@ filtfilt_for_dim!(6);
 /// The following examples shows how to use an arbitrary FIR filter on a 2-dimensional input
 /// `x`.
 /// ```
-/// use sci_rs::signal::filter::{FiltFilt, FiltFiltPad};
-/// use ndarray::{array, Array2, ArrayView2};
-///     let x = array![
-///         [1., 2., 3., 4., 5., 6., 7., 8., 9., 10.],
-///         [0., 1., 4., 9., 16., 25., 36., 49., 64., 81.]
-///     ];
+/// use sci_rs_core::num_rs::prelude::*;
+/// use sci_rs::signal::filter::{filtfilt1_fir_fft, FiltFiltPad};
+/// use ndarray::{array, Array1, ArrayView1};
+/// let x = array![0., 1., 4., 9., 16., 25., 36., 49., 64., 81.];
 /// let b = array![0.5, 0.4, 0.1];
-/// let a = array![1.];
-/// let _ = ArrayView2::filtfilt(
-///     b.view(),
-///     a.view(),
-///     x.view(), // Pass x by reference
-///     Some(1),
-///     Some(FiltFiltPad::default())).unwrap();
-/// let result = Array2::filtfilt(
-///     b.view(),
-///     a.view(),
-///     x, // Pass x by value
-///     Some(1),
-///     Some(FiltFiltPad::default())).unwrap();
+/// let mut proc = get_fft_processor();
+/// let _ = filtfilt1_fir_fft(
+///         b.view(),
+///         x.view(), // Pass x by reference
+///         Some(FiltFiltPad::default()),
+///         &mut proc
+///     ).unwrap();
+/// let result = filtfilt1_fir_fft(
+///         b.view(),
+///         x, // Pass x by value
+///         Some(FiltFiltPad::default()),
+///         &mut proc
+///     ).unwrap();
 ///
 /// use approx::assert_relative_eq;
 /// use ndarray::Zip;
-/// let expected = array![
-///     [1., 2., 3., 4., 5., 6., 7., 8., 9., 10.],
-///     [0., 1.78, 4.88, 9.88, 16.88, 25.88, 36.88, 49.88, 64.78, 81.]
-/// ];
-/// Zip::from(&result).and(&expected)
-///     .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-6));
+/// let expected = array![0., 1.78, 4.88, 9.88, 16.88, 25.88, 36.88, 49.88, 64.78, 81.];
+/// Zip::from(&result).and(&expected).for_each(|&r, &e| {
+///      assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12)
+/// });
 /// ```
 ///
 /// # See Also
@@ -550,6 +546,7 @@ mod test {
     use alloc::vec;
     use approx::assert_relative_eq;
     use ndarray::{array, Zip};
+    use sci_rs_core::num_rs::prelude::get_fft_processor;
 
     /// Test odd_ext as from documentation.
     #[test]
@@ -935,5 +932,29 @@ mod test {
         );
 
         assert!(result.is_err());
+    }
+
+    /// Tests that filtfilt works with default padding with a FIR filter.
+    #[test]
+    fn filtfilt_1d_fir_fft_default_pad() {
+        let b = array![0.1, 0.2, 0.1, -0.3, 0.2, 0.4, 0.2, 0.1];
+        let x = {
+            let rows_n = 40;
+            Array::from_iter((0..rows_n).map(|i| (i as f64).powi(2)))
+        };
+        let mut proc = get_fft_processor();
+
+        let result = filtfilt1_fir_fft(b.view(), x, Some(FiltFiltPad::default()), &mut proc)
+            .expect("Could not filtfilt none_pad");
+        let expected = array![
+            0., 4.96, 10.98, 18.18, 26.44, 35.96, 47.1, 60.12, 75.12, 92.12, 111.12, 132.12,
+            155.12, 180.12, 207.12, 236.12, 267.12, 300.12, 335.12, 372.12, 411.12, 452.12, 495.12,
+            540.12, 587.12, 636.12, 687.12, 740.12, 795.12, 852.12, 911.12, 972.12, 1035.12,
+            1100.1, 1166.96, 1235.44, 1305.18, 1375.98, 1447.96, 1521.
+        ];
+
+        Zip::from(&result)
+            .and(&expected)
+            .for_each(|&r, &e| assert_relative_eq!(r, e, max_relative = 1e-7, epsilon = 1e-12));
     }
 }
