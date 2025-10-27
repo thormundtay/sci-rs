@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "lfilter_fft"
 harness = false
+
+[[bench]]
+name = "filtfilt"
+harness = false
